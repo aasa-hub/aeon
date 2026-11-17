@@ -828,6 +828,7 @@ jobs:
           OPENROUTER_MODEL: ${{ vars.OPENROUTER_MODEL }}
           OPENROUTER_MODEL_SONNET: ${{ vars.OPENROUTER_MODEL_SONNET }}
           OPENROUTER_MODEL_HAIKU: ${{ vars.OPENROUTER_MODEL_HAIKU }}
+          HERMES_INFERENCE_MODEL: ${{ vars.HERMES_INFERENCE_MODEL || 'anthropic/claude-sonnet-5.5' }}
           USEPOD_MODEL: ${{ vars.USEPOD_MODEL }}
           USEPOD_MODEL_SONNET: ${{ vars.USEPOD_MODEL_SONNET }}
           USEPOD_MODEL_HAIKU: ${{ vars.USEPOD_MODEL_HAIKU }}
