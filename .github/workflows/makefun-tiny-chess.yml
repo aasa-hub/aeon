@@ -1,0 +1,141 @@
+name: Make.fun · Tiny Chess Hermes
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_repo:
+        description: 'Public repository under aasa-hub'
+        required: true
+        default: 'aasa-hub/tiny-chess-hermes-01'
+        type: string
+      competition:
+        description: 'Fee-free Make.fun competition slug'
+        required: true
+        default: 'tiny-chess-01'
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-submit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      GH_TOKEN: ${{ secrets.GH_GLOBAL || secrets.GITHUB_TOKEN }}
+      MAKEFUN_API_KEY: ${{ secrets.MAKEFUN_API_KEY }}
+      MAKEFUN_KEYPAIR_JSON: ${{ secrets.MAKEFUN_KEYPAIR_JSON }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      COMPETITION: ${{ inputs.competition }}
+      TARGET_REPO: ${{ inputs.target_repo }}
+    steps:
+      - name: Checkout Aeon runner
+        uses: actions/checkout@v4
+
+      - name: Verify protected credentials are available
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$GH_TOKEN" || { echo 'Missing GitHub write token'; exit 1; }
+          test -n "$MAKEFUN_API_KEY" || { echo 'Missing Make.fun API key'; exit 1; }
+          test -n "$MAKEFUN_KEYPAIR_JSON" || { echo 'Missing Make.fun keypair secret'; exit 1; }
+          test -n "$OPENROUTER_API_KEY" || { echo 'Missing OpenRouter key'; exit 1; }
+          install -d -m 700 "$HOME/.makefun"
+          umask 077
+          printf '%s' "$MAKEFUN_KEYPAIR_JSON" > "$HOME/.makefun/makefun-keypair.json"
+          test "$(stat -c '%a' "$HOME/.makefun/makefun-keypair.json")" = 600
+
+      - name: Install Make.fun kit and Hermes
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://make.fun/c/${COMPETITION}/kit" | tar xz -C "$RUNNER_TEMP"
+          test -x "$RUNNER_TEMP/${COMPETITION}-kit/cli/makefun.mjs" || test -f "$RUNNER_TEMP/${COMPETITION}-kit/cli/makefun.mjs"
+          curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
+          command -v hermes
+          hermes --help >/dev/null
+
+      - name: Prepare empty target repository
+        shell: bash
+        run: |
+          set -euo pipefail
+          export BOT="$RUNNER_TEMP/entry"
+          mkdir -p "$BOT"
+          git -C "$BOT" init -b main
+          git -C "$BOT" remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${TARGET_REPO}.git"
+          printf '%s\n' "$BOT" >> "$GITHUB_ENV"
+
+      - name: Initialize Make.fun repository anchor
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIT="$RUNNER_TEMP/${COMPETITION}-kit"
+          (cd "$BOT" && node "$KIT/cli/makefun.mjs" init --license MIT --keypair "$HOME/.makefun/makefun-keypair.json")
+
+      - name: Run fresh Hermes build session
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/hermes-task.txt" <<'TASK'
+Build and prepare the entry for Make.fun competition tiny-chess-01 in the current repository.
+
+You are the Hermes coding agent working for @aasa-hub. Read the competition requirements and RULES.txt from the unpacked kit at $RUNNER_TEMP/tiny-chess-01-kit before coding. Build an original, deterministic Python 3.13 chess engine at repository-root main.py, no larger than 4,096 bytes, using only the Python standard library. It must communicate with MAKEFUN_ENV_URL using the competition protocol, never call any model or external service during grading, never use wall-clock time or unseeded randomness, and stay comfortably within the move and trial limits.
+
+Use the kit starter only as a protocol reference; do not copy another entrant's implementation. Write main.py yourself in this Hermes session, revise it in at least two separate edits, and run the kit's local checks. Create the required OSI-approved LICENSE, README.md with the exact Make.fun badges/template fields filled for owner aasa-hub and repository tiny-chess-hermes-01, and any required kit metadata. Keep the repository within the published size limits. Do not add secrets. Commit the finished entry on top of the Make.fun anchor and push it to the configured origin only after local validation passes. Do not submit the Make.fun entry yourself; the parent workflow will bundle the transcript and submit after validation.
+TASK
+          export HOME="$HOME"
+          cd "$BOT"
+          hermes --provider openrouter --usage-file "$RUNNER_TEMP/hermes-usage.json" -z "$(cat "$RUNNER_TEMP/hermes-task.txt")" | tee "$RUNNER_TEMP/hermes-output.txt"
+
+      - name: Validate, bundle Hermes transcript, and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIT="$RUNNER_TEMP/${COMPETITION}-kit"
+          test -f "$BOT/main.py"
+          test "$(wc -c < "$BOT/main.py")" -le 4096
+          (cd "$KIT" && node cli/makefun.mjs check --repo "$BOT" 2>&1 | tee "$RUNNER_TEMP/check.txt")
+          (cd "$KIT" && node cli/makefun.mjs grade-local --kit . --bot "$BOT" --driver docker --instances 3 2>&1 | tee "$RUNNER_TEMP/grade.txt")
+          test -f "$BOT/README.md"
+          test -f "$BOT/LICENSE"
+          cat > "$RUNNER_TEMP/makefun-user-prompt.txt" <<'PROMPT'
+Submit current worked bounties challenges first. And then, Hermes create and push a new public repository under aasa-hub, Automation scope: automatically build and submit only fee-free entries when all published checks pass, also approve claiming/spending rewards to our agent wallet. Review mode: notify me after each of submission was passed(if failed the submitted challenge was occurs, fix that needed actions).
+PROMPT
+          (cd "$KIT" && node cli/makefun.mjs bundle --repo "$BOT" --hermes-dir "$HOME/.hermes" --harness hermes --provider openrouter --model default --effort standard --prompt-file "$RUNNER_TEMP/makefun-user-prompt.txt" --prompt-origin typed --mcp none --instructions withheld:private-system-and-repository-instructions --out "$RUNNER_TEMP/transcripts.tar.gz" 2>&1 | tee "$RUNNER_TEMP/bundle.txt")
+          git -C "$BOT" status --short
+          git -C "$BOT" add -A
+          git -C "$BOT" commit -m 'Build tiny chess Make.fun entry' || true
+          git -C "$BOT" push -u origin main
+          git -C "$BOT" rev-parse HEAD > "$RUNNER_TEMP/commit.txt"
+
+      - name: Submit fee-free Make.fun entry
+        shell: bash
+        run: |
+          set -euo pipefail
+          KIT="$RUNNER_TEMP/${COMPETITION}-kit"
+          COMMIT_SHA="$(cat "$RUNNER_TEMP/commit.txt")"
+          (cd "$KIT" && node cli/makefun.mjs submit --competition "$COMPETITION" --bundle "$RUNNER_TEMP/transcripts.tar.gz" --repo-url "https://github.com/${TARGET_REPO}" --commit "$COMMIT_SHA" --title 'Hermes Tiny Chess Engine' --keypair "$HOME/.makefun/makefun-keypair.json" --repo "$BOT" 2>&1 | tee "$RUNNER_TEMP/submit.txt")
+
+      - name: Publish result summary
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          {
+            echo '## Make.fun tiny-chess Hermes run'
+            echo
+            echo "Competition: ${COMPETITION}"
+            echo "Repository: https://github.com/${TARGET_REPO}"
+            echo
+            echo '### Check output'
+            sed -n '1,160p' "$RUNNER_TEMP/check.txt" 2>/dev/null || true
+            echo
+            echo '### Grade output'
+            sed -n '1,200p' "$RUNNER_TEMP/grade.txt" 2>/dev/null || true
+            echo
+            echo '### Bundle output'
+            sed -n '1,160p' "$RUNNER_TEMP/bundle.txt" 2>/dev/null || true
+            echo
+            echo '### Submission output'
+            sed -n '1,160p' "$RUNNER_TEMP/submit.txt" 2>/dev/null || true
+          } >> "$GITHUB_STEP_SUMMARY"
