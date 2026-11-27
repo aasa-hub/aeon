@@ -11,12 +11,12 @@
   },
   "heartbeat": {
     "last_dispatch": "2026-11-27T09:01:39Z",
-    "last_status": "dispatched",
-    "last_failed": "2026-11-26T15:47:51Z",
-    "total_runs": 11,
+    "last_status": "failed",
+    "last_failed": "2026-11-27T09:05:38Z",
+    "total_runs": 12,
     "total_successes": 0,
-    "total_failures": 11,
-    "consecutive_failures": 11,
+    "total_failures": 12,
+    "consecutive_failures": 12,
     "success_rate": 0,
     "last_error": "hermes: hermes exited 2: OpenRouter rejected your API key, so the model can't be reached. Update it in Settings → Providers, or run `hermes setup` i"
   }
